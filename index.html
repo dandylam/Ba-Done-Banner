@@ -20,10 +20,14 @@ h3{font-size:20px;line-height:1.4;margin:8px 0 12px}
 .eyebrow{font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--purple)}
 
 /* ===== Buttons ===== */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:15px;background:var(--purple);color:#fff;border:0;border-radius:8px;padding:14px 23px;font-weight:700;transition:background .2s,transform .2s}
-.btn:hover{background:#612485;transform:translateY(-2px)}
+.btn{position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;gap:15px;background:var(--purple);color:#fff;border:0;border-radius:8px;padding:14px 23px;font-weight:700;transition:background .2s,transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s}
+.btn:hover{background:#612485;transform:translateY(-3px);box-shadow:0 12px 26px #7934a54d}
+.btn:active{transform:translateY(0) scale(.97);box-shadow:0 4px 10px #7934a540}
+.btn::after{content:"";position:absolute;top:0;bottom:0;left:-80%;width:45%;background:linear-gradient(100deg,transparent,#ffffff66,transparent);transform:skewX(-20deg);transition:left .7s ease;pointer-events:none}
+.btn:hover::after{left:135%}
 .btn.outline{background:transparent;color:var(--ink);border:1px solid #c9bdcf}
-.btn.outline:hover{background:#f1eaf6}
+.btn.outline::after{background:linear-gradient(100deg,transparent,#7934a529,transparent)}
+.btn.outline:hover{background:#f1eaf6;box-shadow:0 10px 22px #7934a52e}
 .btn.small{padding:10px 16px}
 .icon-img{display:block;width:24px;height:24px;flex-shrink:0;border-radius:6px}
 .btn.with-icon{gap:10px}
@@ -33,10 +37,15 @@ h3{font-size:20px;line-height:1.4;margin:8px 0 12px}
 header{position:sticky;top:0;z-index:10;background:#ffffffed;border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}
 .head{min-height:96px;display:flex;align-items:center;justify-content:space-between;gap:24px}
 .brand{display:flex;align-items:center;gap:12px}
-.brand-logo{width:52px;height:56px;object-fit:contain;flex-shrink:0}
+.brand-logo{width:52px;height:56px;object-fit:contain;flex-shrink:0;transition:transform .4s cubic-bezier(.2,.7,.2,1);animation:logoGlow 3.6s ease-in-out infinite}
+.brand:hover .brand-logo{transform:rotate(-8deg) scale(1.1)}
+@keyframes logoGlow{0%,100%{filter:drop-shadow(0 0 0 #bd228f00)}50%{filter:drop-shadow(0 0 9px #bd228f73) drop-shadow(0 0 5px #63cec699)}}
 .brand strong{display:block;font-size:19px;letter-spacing:.4px}
 .brand small{display:block;font-size:11px;letter-spacing:.4px;margin-top:2px;color:var(--muted)}
 nav{display:flex;align-items:center;gap:28px;font-size:14px}
+nav a:not(.btn){position:relative;padding:6px 0}
+nav a:not(.btn)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--purple),var(--green));transform:scaleX(0);transform-origin:left;transition:transform .3s ease}
+nav a:not(.btn):hover::after{transform:scaleX(1)}
 
 /* ===== Brand banner ===== */
 .brand-banner{margin:0;background:#32283d;position:relative}
@@ -48,7 +57,18 @@ nav{display:flex;align-items:center;gap:28px;font-size:14px}
 .hero>div{display:grid;grid-template-columns:1.15fr 1fr;column-gap:70px;align-items:start}
 .hero .eyebrow{grid-column:1/-1}
 .hero h1{grid-column:1;grid-row:2/5;font-size:clamp(36px,3.4vw,46px);line-height:1.28;letter-spacing:-1.5px;margin:18px 0 0}
-.hero h1 span{display:inline-block;background:linear-gradient(105deg,#862bb1 15%,#bd228f 95%);color:transparent;-webkit-background-clip:text;background-clip:text}
+.hero h1 span{display:inline-block;background-image:linear-gradient(105deg,#862bb1,#bd228f,#862bb1);background-size:200% auto;color:transparent;-webkit-background-clip:text;background-clip:text;animation:shimmer 6s linear infinite}
+@keyframes shimmer{from{background-position:0% 50%}to{background-position:200% 50%}}
+@keyframes rise{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
+.hero .eyebrow,.hero h1,.hero p,.hero .actions,.hero .hero-note{animation:rise .9s cubic-bezier(.2,.7,.2,1) both}
+.hero .eyebrow{animation-delay:.05s}
+.hero h1{animation-delay:.2s}
+.hero p{animation-delay:.4s}
+.hero .actions{animation-delay:.55s}
+.hero .hero-note{animation-delay:.7s}
+.hero .actions .btn:not(.outline){animation:ctaPulse 2.8s ease-in-out 1.6s infinite}
+.hero .actions .btn:not(.outline):hover{animation:none}
+@keyframes ctaPulse{0%,100%{box-shadow:0 6px 18px #7934a52e}50%{box-shadow:0 8px 32px #bd228f73}}
 .hero p{grid-column:2;grid-row:2;color:var(--muted);max-width:520px;margin:22px 0 0}
 .actions{display:flex;gap:14px;flex-wrap:wrap}
 .hero .actions{grid-column:2;grid-row:3;margin-top:22px}
@@ -134,17 +154,20 @@ footer{padding:44px 0 25px;background:var(--ink);color:#fff}
 .foot-top{display:flex;justify-content:space-between;gap:40px}
 .foot-top p{font-size:13px;color:#cbc1d2}
 .footer-brand{display:flex;align-items:flex-start;gap:14px}
-.footer-logo{object-fit:contain;flex-shrink:0}
+.footer-logo{object-fit:contain;flex-shrink:0;transition:transform .4s cubic-bezier(.2,.7,.2,1);animation:logoGlow 3.6s ease-in-out infinite}
+.footer-brand:hover .footer-logo{transform:rotate(-8deg) scale(1.1)}
 .footer-brand p{margin-top:8px}
 .foot-contact a{border-bottom:1px solid #5a4865}
 .foot-contact a:hover{border-color:#cbc1d2}
 .social{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
-.social a{display:inline-flex;align-items:center;gap:8px;border:1px solid #5a4865;border-radius:7px;padding:9px 14px;font-size:13px}
-.social a:hover{background:#42324c}
+.social a{display:inline-flex;align-items:center;gap:8px;border:1px solid #5a4865;border-radius:7px;padding:9px 14px;font-size:13px;transition:background .2s,transform .25s cubic-bezier(.2,.7,.2,1),border-color .2s}
+.social a:hover{background:#42324c;border-color:#75d6ce;transform:translateY(-3px)}
 .social .icon-img{width:22px;height:22px;border-radius:5px}
 .foot-bottom{display:flex;justify-content:space-between;gap:20px;border-top:1px solid #51435d;padding-top:20px;margin-top:30px;font-size:11px;color:#bfb2c8}
 .float-wa{position:fixed;bottom:20px;right:20px;z-index:15;display:inline-flex;align-items:center;gap:8px;background:#272331;color:#fff;border:1px solid #6e5680;padding:12px 18px;border-radius:30px;box-shadow:0 5px 25px #27233130;font-size:13px;font-weight:bold}
-.float-wa:hover{background:var(--purple)}
+.float-wa{transition:background .2s,transform .25s cubic-bezier(.2,.7,.2,1);animation:waRing 3s ease-out infinite}
+.float-wa:hover{background:var(--purple);transform:translateY(-3px);animation:none}
+@keyframes waRing{0%{box-shadow:0 5px 25px #27233130,0 0 0 0 #63cec699}70%,100%{box-shadow:0 5px 25px #27233130,0 0 0 16px #63cec600}}
 
 /* ===== Tablet (≤1000px) ===== */
 @media(max-width:1000px){
@@ -211,10 +234,15 @@ form{padding:22px}
 .services{grid-template-columns:1fr}
 }
 
+/* ===== Scroll reveal for headings ===== */
+.reveal{opacity:0;transform:translateY(24px);transition:opacity .8s ease,transform .8s cubic-bezier(.2,.7,.2,1);transition-delay:var(--d,0s)}
+.reveal.in{opacity:1;transform:none}
+
 @media(prefers-reduced-motion:reduce){
 html{scroll-behavior:auto}
-.btn{transition:none}
-.btn:hover{transform:none}
+*,*::before,*::after{animation:none!important;transition:none!important}
+.btn:hover,.btn:active,.social a:hover,.float-wa:hover,.brand:hover .brand-logo,.footer-brand:hover .footer-logo{transform:none}
+.reveal{opacity:1;transform:none}
 }
 </style></head><body>
 <div class="topline"><span class="topline-en">BA DONE BANNER &amp; PRODUCTION CO.</span><span class="topline-sep"> · </span><span class="topline-zh">設計 / 噴畫 / 製作 / 安裝</span></div>
@@ -241,4 +269,7 @@ $('photos').addEventListener('change',()=>{const errors=[];for(const file of $('
 $('quote-form').addEventListener('submit',e=>{e.preventDefault();const v={name:$('name').value.trim(),phone:$('phone').value.trim(),type:$('type').value,date:$('date').value,details:$('details').value.trim()};if(!v.name||!v.details){$('send-status').textContent='請填寫稱呼及項目資料。';return;}const url='https://wa.me/85296638839?text='+encodeURIComponent(makeMessage(v,selected));$('send-status').replaceChildren();const msg=document.createElement('span');msg.textContent='請在 WhatsApp 確認文字並按發送。'+(selected.length?' 記得再附上 '+selected.length+' 張照片。':'');const link=document.createElement('a');link.href=url;link.target='_blank';link.rel='noopener';link.textContent=' 如未開啟，點此重試。';link.style.textDecoration='underline';$('send-status').append(msg,link);window.open(url,'_blank','noopener');});
 $('share-photos').addEventListener('click',async()=>{if(!selected.length)return;try{await navigator.share({files:selected});$('send-status').textContent='請在分享選單選擇 WhatsApp，並確認接收人為 +852 9663 8839。';}catch(e){if(e.name!=='AbortError')$('send-status').textContent='此裝置無法分享照片，請在 WhatsApp 使用附件按鈕選取照片。';}});
 window.addEventListener('pagehide',()=>previewUrls.forEach(url=>URL.revokeObjectURL(url)));
+(function(){if(!('IntersectionObserver' in window)||matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}}),{threshold:.15,rootMargin:'0px 0px -6% 0px'});
+document.querySelectorAll('.section').forEach(sec=>sec.querySelectorAll('.eyebrow,h2,.section-head p').forEach((el,i)=>{el.classList.add('reveal');el.style.setProperty('--d',(i*.12)+'s');io.observe(el);}));})();
 </script></body></html>
