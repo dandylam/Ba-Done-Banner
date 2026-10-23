@@ -164,5 +164,64 @@ drop policy if exists "order files admin delete" on storage.objects;
 create policy "order files admin delete" on storage.objects for delete to authenticated
   using (bucket_id = 'order-files' and public.is_admin());
 
+-- ===== 訂單對話（客戶 ↔ 巴登）=====
+create table if not exists public.order_messages (
+  id bigint generated always as identity primary key,
+  order_id bigint not null references public.orders on delete cascade,
+  sender_id uuid default auth.uid() references auth.users on delete set null,
+  from_staff boolean not null default false,
+  body text not null check (char_length(btrim(body)) between 1 and 2000),
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists order_messages_order_idx on public.order_messages (order_id, created_at);
+alter table public.order_messages enable row level security;
+
+-- 發送者身份由伺服器決定，客戶無法冒充巴登
+create or replace function public.order_messages_before_insert() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  new.sender_id := auth.uid();
+  new.from_staff := public.is_admin();
+  new.read_at := null;
+  new.created_at := now();
+  return new;
+end $$;
+drop trigger if exists order_messages_before_insert on public.order_messages;
+create trigger order_messages_before_insert before insert on public.order_messages
+  for each row execute function public.order_messages_before_insert();
+
+drop policy if exists "messages read own or admin" on public.order_messages;
+create policy "messages read own or admin" on public.order_messages for select to authenticated
+  using (public.is_admin() or exists (
+    select 1 from public.orders o where o.id = order_id and o.customer_id = auth.uid()));
+drop policy if exists "messages insert own or admin" on public.order_messages;
+create policy "messages insert own or admin" on public.order_messages for insert to authenticated
+  with check (public.is_admin() or exists (
+    select 1 from public.orders o where o.id = order_id and o.customer_id = auth.uid()));
+
+-- 將對方發出嘅訊息標記為已讀
+create or replace function public.mark_messages_read(p_order_id bigint) returns void
+language plpgsql security definer set search_path = public as $$
+declare v_staff boolean := public.is_admin();
+begin
+  if not v_staff and not exists (select 1 from public.orders where id = p_order_id and customer_id = auth.uid()) then
+    return;
+  end if;
+  update public.order_messages set read_at = now()
+   where order_id = p_order_id and read_at is null and from_staff = not v_staff;
+end $$;
+revoke execute on function public.mark_messages_read(bigint) from public, anon;
+grant execute on function public.mark_messages_read(bigint) to authenticated;
+
+-- 即時收到新訊息（Supabase Realtime）
+do $$ begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+     and not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime'
+                     and schemaname = 'public' and tablename = 'order_messages') then
+    alter publication supabase_realtime add table public.order_messages;
+  end if;
+end $$;
+
 -- ===== 設定管理員（先用該電郵喺網站註冊，再執行下面一句）=====
 -- insert into public.admins (user_id) select id from auth.users where email = 'print@e8done.com';

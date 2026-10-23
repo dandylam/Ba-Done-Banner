@@ -19,6 +19,7 @@ const {sb, h} = BD;
 const $ = id => document.getElementById(id);
 let user; // undefined = 未初始化
 let filter = {status: 'active', q: ''};
+let stopLive = null;
 const NEEDS_ACTION = ['submitted', 'revision', 'confirmed'];
 
 async function setUser(u) {
@@ -36,6 +37,7 @@ async function setUser(u) {
 }
 
 function route() {
+  if (stopLive) { stopLive(); stopLive = null; }
   if (!user || $('app').hidden) return;
   const m = location.hash.match(/^#order-(\d+)$/);
   const view = $('view');
@@ -46,25 +48,31 @@ function route() {
 async function showList(view) {
   const {data, error} = await sb.from('orders').select('*').order('created_at', {ascending: false}).limit(500);
   if (error) throw error;
+  const unread = await BD.unreadCounts(true);
   const listEl = h('div', {class: 'order-list'});
   const render = () => {
     const q = filter.q.toLowerCase();
     const rows = data.filter(o => (filter.status === 'all' || (filter.status === 'active' ? !['completed', 'cancelled'].includes(o.status) : o.status === filter.status))
       && (!q || [BD.orderNo(o.id), o.contact_name, o.company, o.phone, o.customer_email, o.product_type].some(v => v && v.toLowerCase().includes(q))));
-    listEl.replaceChildren(...(rows.length ? rows.map(o => h('a', {class: 'order-row' + (NEEDS_ACTION.includes(o.status) ? ' attention' : ''), href: '#order-' + o.id},
-      h('b', null, BD.orderNo(o.id)),
+    listEl.replaceChildren(...(rows.length ? rows.map(o => h('a', {class: 'order-row' + (NEEDS_ACTION.includes(o.status) || unread[o.id] ? ' attention' : ''), href: '#order-' + o.id},
+      h('b', null, BD.orderNo(o.id), unread[o.id] ? h('span', {class: 'unread'}, unread[o.id] + ' 新訊息') : null),
       h('span', {class: 'meta'}, [o.contact_name, o.company, o.product_type, o.size].filter(Boolean).join(' · ') + ' · ' + BD.fmtDate(o.created_at)),
       BD.badge(o.status))) : [h('div', {class: 'card empty'}, '沒有符合條件嘅訂單。')]));
   };
   const statusSel = h('select', {'aria-label': '狀態篩選', onchange: e => { filter.status = e.target.value; render(); }},
     [['active', '進行中訂單'], ['all', '全部訂單'], ...Object.entries(BD.STATUS)].map(([v, t]) => h('option', {value: v, selected: v === filter.status}, t)));
   const search = h('input', {type: 'search', placeholder: '搜尋編號、客戶、電話、電郵…', 'aria-label': '搜尋', value: filter.q, oninput: e => { filter.q = e.target.value; render(); }});
-  const waiting = data.filter(o => NEEDS_ACTION.includes(o.status)).length;
+  const waiting = data.filter(o => NEEDS_ACTION.includes(o.status) || unread[o.id]).length;
   view.replaceChildren(
     h('div', {class: 'page-head'}, h('div', null, h('div', {class: 'eyebrow'}, 'ORDERS'), h('h1', null, '訂單管理')),
       h('p', {class: 'muted'}, '共 ' + data.length + ' 張訂單 · ' + waiting + ' 張需要跟進')),
     h('div', {class: 'filters'}, statusSel, search), listEl);
   render();
+  // 客戶發新訊息時自動更新列表
+  const channel = sb.channel('admin-new-messages')
+    .on('postgres_changes', {event: 'INSERT', schema: 'public', table: 'order_messages'}, p => { if (!p.new.from_staff) route(); })
+    .subscribe();
+  stopLive = () => sb.removeChannel(channel);
 }
 
 async function showOrder(view, id) {
@@ -153,10 +161,12 @@ async function showOrder(view, id) {
         h('section', {class: 'card'}, h('h3', null, '發票'), BD.fileList(invoices, urls, delBtn),
           h('div', {class: 'inline-form'}, invPick.el, h('label', {for: 'inv-note'}, '備註（客戶睇到）'), invNote, invBtn, invMsg))),
       h('div', null,
+        h('section', {class: 'card'}, h('h3', null, '客戶對話'), h('div', {id: 'chat'})),
         statusCard,
         h('section', {class: 'card'}, h('h3', null, '客戶及訂單資料'), BD.orderInfo(o),
           h('dl', {class: 'info'}, h('dt', null, '登入電郵'), h('dd', null, h('a', {href: 'mailto:' + o.customer_email}, o.customer_email || ''))),
           custPhone ? h('div', {class: 'form-actions'}, h('a', {class: 'btn green small', href: BD.waLink(custPhone, waText), target: '_blank', rel: 'noopener'}, 'WhatsApp 通知客戶 ↗')) : null))));
+  stopLive = BD.mountChat($('chat'), id, {isStaff: true});
 }
 
 function proofList(proofs, urls, delBtn) {

@@ -16,12 +16,14 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="assets/portal/config.js"></script>
 <script src="assets/portal/common.js"></script>
+<script src="assets/chat.js"></script>
 <script>
 'use strict';
 const {sb, h} = BD;
 const $ = id => document.getElementById(id);
 let user; // undefined = 未初始化
 let recovering = false;
+let stopLive = null;
 
 function setUser(u) {
   if (recovering || (u && u.id) === (user && user.id)) return;
@@ -30,11 +32,19 @@ function setUser(u) {
   $('logout').hidden = !u;
   $('app').hidden = !u;
   $('auth').hidden = !!u;
-  if (u) route();
+  if (u) { route(); identifyLiveChat(u); }
   else BD.mountAuth($('auth'), {title: '客戶登入', intro: '登入後可以落單、上傳設計稿、確認稿件，及查看過往訂單同發票。'});
 }
 
+// 網站即時對話（Tawk.to）帶入已登入客戶嘅電郵，方便職員識別
+function identifyLiveChat(u) {
+  const set = () => window.Tawk_API.setAttributes && window.Tawk_API.setAttributes({name: u.email, email: u.email}, () => {});
+  if (!window.Tawk_API) return;
+  if (window.Tawk_API.setAttributes) set(); else window.Tawk_API.onLoad = set;
+}
+
 function route() {
+  if (stopLive) { stopLive(); stopLive = null; }
   if (!user) return;
   const hash = location.hash;
   const m = hash.match(/^#order-(\d+)$/);
@@ -50,12 +60,13 @@ function route() {
 async function showList(view) {
   const {data, error} = await sb.from('orders').select('id,product_type,size,quantity,status,created_at,updated_at').order('created_at', {ascending: false});
   if (error) throw error;
+  const unread = await BD.unreadCounts(false);
   if (!data.length) {
     view.replaceChildren(h('div', {class: 'card empty'}, h('p', null, '你暫時未有訂單。'), h('a', {class: 'btn', href: '#new'}, '建立第一張訂單')));
     return;
   }
-  view.replaceChildren(h('div', {class: 'order-list'}, data.map(o => h('a', {class: 'order-row' + (o.status === 'proof_sent' ? ' attention' : ''), href: '#order-' + o.id},
-    h('b', null, BD.orderNo(o.id)),
+  view.replaceChildren(h('div', {class: 'order-list'}, data.map(o => h('a', {class: 'order-row' + (o.status === 'proof_sent' || unread[o.id] ? ' attention' : ''), href: '#order-' + o.id},
+    h('b', null, BD.orderNo(o.id), unread[o.id] ? h('span', {class: 'unread'}, unread[o.id] + ' 新訊息') : null),
     h('span', {class: 'meta'}, [o.product_type, o.size, o.quantity && o.quantity + ' 件'].filter(Boolean).join(' · ') + ' · ' + BD.fmtDate(o.created_at)),
     BD.badge(o.status)))));
 }
@@ -155,11 +166,13 @@ async function showOrder(view, id) {
     h('div', {class: 'detail-grid'},
       h('div', null,
         h('section', {class: 'card'}, h('h3', null, '確認稿件'), proofSection(proofs, urls)),
+        h('section', {class: 'card'}, h('h3', null, '同巴登對話'), h('div', {id: 'chat'})),
         h('section', {class: 'card'}, h('h3', null, '發票'), BD.fileList(invoices, urls))),
       h('div', null,
         h('section', {class: 'card'}, h('h3', null, '訂單資料'), BD.orderInfo(o)),
         h('section', {class: 'card'}, h('h3', null, '我上傳嘅設計稿'), BD.fileList(designs, urls),
           open ? h('div', {class: 'inline-form'}, more.el, moreBtn, moreStatus) : null))));
+  stopLive = BD.mountChat($('chat'), id, {isStaff: false});
 }
 
 function proofSection(proofs, urls) {

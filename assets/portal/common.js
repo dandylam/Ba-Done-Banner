@@ -126,6 +126,60 @@ const BD = (() => {
 
   const waLink = (phone, text) => 'https://wa.me/' + phone + '?text=' + encodeURIComponent(text);
 
+  // 訂單對話：顯示訊息、發送、即時接收；回傳 cleanup 函數
+  function mountChat(root, orderId, {isStaff}) {
+    const seen = new Set();
+    const log = h('div', {class: 'chat-log', role: 'log', 'aria-live': 'polite'});
+    const input = h('textarea', {id: 'chat-input', rows: '2', maxlength: '2000', placeholder: isStaff ? '回覆客戶…' : '有問題？直接喺度問巴登…'});
+    const status = h('p', {class: 'status', role: 'status'});
+    const sendBtn = h('button', {class: 'btn small', type: 'submit'}, '發送');
+    const empty = h('p', {class: 'muted chat-empty'}, isStaff ? '客戶未有留言。' : '有關此訂單嘅任何問題，都可以喺度留言，巴登職員會盡快回覆。');
+    const markRead = () => { if (document.visibilityState === 'visible') sb.rpc('mark_messages_read', {p_order_id: orderId}); };
+    function add(m) {
+      if (seen.has(m.id)) return;
+      seen.add(m.id);
+      empty.remove();
+      const mine = m.from_staff === isStaff;
+      log.append(h('div', {class: 'msg' + (mine ? ' mine' : '')},
+        h('small', null, (m.from_staff ? '巴登職員' : (isStaff ? '客戶' : '你')) + ' · ' + fmtDate(m.created_at)),
+        h('p', null, m.body)));
+      log.scrollTop = log.scrollHeight;
+    }
+    const form = h('form', {class: 'chat-form', onsubmit: async e => {
+      e.preventDefault();
+      const body = input.value.trim();
+      if (!body) return;
+      sendBtn.disabled = true;
+      const {data, error} = await sb.from('order_messages').insert({order_id: orderId, body}).select().single();
+      sendBtn.disabled = false;
+      if (error) { status.className = 'status error'; status.textContent = errText(error); return; }
+      status.textContent = '';
+      input.value = '';
+      add(data);
+    }}, h('label', {for: 'chat-input', class: 'sr-only'}, '訊息'), input, sendBtn);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) form.requestSubmit(); });
+    root.replaceChildren(log, form, h('p', {class: 'hint'}, 'Ctrl / ⌘ + Enter 快速發送'), status);
+    log.append(empty);
+    sb.from('order_messages').select('*').eq('order_id', orderId).order('created_at').then(({data, error}) => {
+      if (error) { status.className = 'status error'; status.textContent = errText(error); return; }
+      data.forEach(add);
+      markRead();
+    });
+    const channel = sb.channel('order-messages-' + orderId)
+      .on('postgres_changes', {event: 'INSERT', schema: 'public', table: 'order_messages', filter: 'order_id=eq.' + orderId},
+        payload => { add(payload.new); if (payload.new.from_staff !== isStaff) markRead(); })
+      .subscribe();
+    document.addEventListener('visibilitychange', markRead);
+    return () => { sb.removeChannel(channel); document.removeEventListener('visibilitychange', markRead); };
+  }
+
+  // 未讀訊息數目（對方發出、未讀），回傳 {order_id: count}
+  async function unreadCounts(isStaff) {
+    const {data, error} = await sb.from('order_messages').select('order_id').is('read_at', null).eq('from_staff', !isStaff);
+    if (error) return {};
+    return data.reduce((acc, m) => { acc[m.order_id] = (acc[m.order_id] || 0) + 1; return acc; }, {});
+  }
+
   // 登入／註冊／忘記密碼表格
   function mountAuth(root, {signup = true, title = '登入', intro} = {}) {
     let mode = 'login';
@@ -194,5 +248,5 @@ const BD = (() => {
   }
 
   return {cfg, ready, sb, STATUS, PROOF_STATUS, PRODUCTS, h, orderNo, fmtDate, fmtDay, fmtSize, isImage, badge, errText,
-    uploadFile, uploadAll, signedUrls, downloadUrl, fileList, filePicker, orderInfo, waLink, mountAuth, mountRecovery};
+    uploadFile, uploadAll, signedUrls, downloadUrl, fileList, filePicker, orderInfo, waLink, mountChat, unreadCounts, mountAuth, mountRecovery};
 })();

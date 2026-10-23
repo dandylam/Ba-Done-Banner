@@ -180,6 +180,7 @@ footer{padding:44px 0 25px;background:var(--ink);color:#fff}
 .float-wa{position:fixed;bottom:20px;right:20px;z-index:15;display:inline-flex;align-items:center;gap:8px;background:#272331;color:#fff;border:1px solid #6e5680;padding:12px 18px;border-radius:30px;box-shadow:0 5px 25px #27233130;font-size:13px;font-weight:bold}
 .float-wa{transition:background .2s,transform .25s cubic-bezier(.2,.7,.2,1);animation:waRing 3s ease-out infinite}
 .float-wa:hover{background:var(--purple);transform:translateY(-3px);animation:none}
+.has-live-chat .float-wa{right:auto;left:20px}
 @keyframes waRing{0%{box-shadow:0 5px 25px #27233130,0 0 0 0 #63cec699}70%,100%{box-shadow:0 5px 25px #27233130,0 0 0 16px #63cec600}}
 
 /* ===== Tablet (≤1000px) ===== */
@@ -236,6 +237,7 @@ form{padding:22px}
 .foot-bottom>span+span{margin-top:6px}
 .footer-logo{width:39px;height:42px}
 .float-wa{right:14px;bottom:14px;font-size:12px}
+.has-live-chat .float-wa{right:auto;left:14px}
 }
 
 /* ===== Small phones (≤360px) ===== */
@@ -289,4 +291,4 @@ window.addEventListener('pagehide',()=>previewUrls.forEach(url=>URL.revokeObject
 (function(){if(!('IntersectionObserver' in window)||matchMedia('(prefers-reduced-motion: reduce)').matches)return;
 const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}}),{threshold:.15,rootMargin:'0px 0px -6% 0px'});
 document.querySelectorAll('.section').forEach(sec=>sec.querySelectorAll('.eyebrow,h2,.section-head p').forEach((el,i)=>{el.classList.add('reveal');el.style.setProperty('--d',(i*.12)+'s');io.observe(el);}));})();
-</script></body></html>
+</script><script src="assets/chat.js"></script></body></html>
