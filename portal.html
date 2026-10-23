@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="theme-color" content="#272331">
+<title>客戶專區 | 巴登噴畫及製作公司</title>
+<link rel="stylesheet" href="assets/portal/portal.css">
+</head><body>
+<header class="topbar"><div class="wrap"><a class="brand" href="./"><strong>巴登噴畫及製作公司</strong><small>客戶專區 · Customer Portal</small></a><div class="top-actions"><span class="who" id="who"></span><button class="btn outline small" id="logout" type="button" hidden>登出</button><a class="btn outline small" href="./" id="home-link">返回主頁</a></div></div></header>
+<main class="wrap">
+<div class="notice warn" id="setup" hidden><b>客戶專區尚未啟用。</b><br>請先喺 <code>assets/portal/config.js</code> 填入 Supabase 設定（步驟見 <code>supabase/README.md</code>）。</div>
+<div id="auth"></div>
+<div id="app" hidden>
+  <div class="page-head"><div><div class="eyebrow">MY ORDERS</div><h1>客戶專區</h1></div></div>
+  <nav class="tabs" aria-label="客戶專區"><a href="#orders" id="tab-orders">我的訂單</a><a href="#new" id="tab-new">＋ 新訂單</a></nav>
+  <div id="view"></div>
+</div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="assets/portal/config.js"></script>
+<script src="assets/portal/common.js"></script>
+<script>
+'use strict';
+const {sb, h} = BD;
+const $ = id => document.getElementById(id);
+let user; // undefined = 未初始化
+let recovering = false;
+
+function setUser(u) {
+  if (recovering || (u && u.id) === (user && user.id)) return;
+  user = u;
+  $('who').textContent = u ? u.email : '';
+  $('logout').hidden = !u;
+  $('app').hidden = !u;
+  $('auth').hidden = !!u;
+  if (u) route();
+  else BD.mountAuth($('auth'), {title: '客戶登入', intro: '登入後可以落單、上傳設計稿、確認稿件，及查看過往訂單同發票。'});
+}
+
+function route() {
+  if (!user) return;
+  const hash = location.hash;
+  const m = hash.match(/^#order-(\d+)$/);
+  $('tab-orders').setAttribute('aria-current', hash !== '#new' ? 'page' : 'false');
+  $('tab-new').setAttribute('aria-current', hash === '#new' ? 'page' : 'false');
+  const view = $('view');
+  view.replaceChildren(h('p', {class: 'muted'}, '載入中…'));
+  const done = hash === '#new' ? showNew(view) : m ? showOrder(view, +m[1]) : showList(view);
+  done.catch(err => view.replaceChildren(h('p', {class: 'error'}, BD.errText(err))));
+  window.scrollTo(0, 0);
+}
+
+async function showList(view) {
+  const {data, error} = await sb.from('orders').select('id,product_type,size,quantity,status,created_at,updated_at').order('created_at', {ascending: false});
+  if (error) throw error;
+  if (!data.length) {
+    view.replaceChildren(h('div', {class: 'card empty'}, h('p', null, '你暫時未有訂單。'), h('a', {class: 'btn', href: '#new'}, '建立第一張訂單')));
+    return;
+  }
+  view.replaceChildren(h('div', {class: 'order-list'}, data.map(o => h('a', {class: 'order-row' + (o.status === 'proof_sent' ? ' attention' : ''), href: '#order-' + o.id},
+    h('b', null, BD.orderNo(o.id)),
+    h('span', {class: 'meta'}, [o.product_type, o.size, o.quantity && o.quantity + ' 件'].filter(Boolean).join(' · ') + ' · ' + BD.fmtDate(o.created_at)),
+    BD.badge(o.status)))));
+}
+
+async function showNew(view) {
+  const {data: last} = await sb.from('orders').select('contact_name,company,phone').order('created_at', {ascending: false}).limit(1);
+  const prev = (last && last[0]) || {};
+  const field = (id, label, input, full) => h('div', {class: 'field' + (full ? ' full' : '')}, h('label', {for: id}, label), input);
+  const inp = (id, attrs) => h('input', {id, ...attrs});
+  const picker = BD.filePicker({id: 'designs', label: '＋ 上傳設計稿 / 參考圖片', hint: 'PDF、AI、PSD、JPG、PNG、ZIP 等 · 最多 10 個，每個最多 50MB'});
+  const status = h('p', {class: 'status', role: 'status', 'aria-live': 'polite'});
+  const submit = h('button', {class: 'btn', type: 'submit'}, '提交訂單');
+  const form = h('form', {class: 'card', onsubmit: async e => {
+    e.preventDefault();
+    const f = e.target.elements;
+    const files = picker.files();
+    submit.disabled = true;
+    status.className = 'status';
+    status.textContent = '提交中…';
+    let order = null;
+    try {
+      const {data, error} = await sb.from('orders').insert({
+        contact_name: f.contact_name.value.trim(), company: f.company.value.trim() || null, phone: f.phone.value.trim() || null,
+        product_type: f.product_type.value, size: f.size.value.trim() || null, quantity: f.quantity.value ? +f.quantity.value : null,
+        material: f.material.value.trim() || null, install_needed: f.install_needed.checked, due_date: f.due_date.value || null,
+        details: f.details.value.trim() || null
+      }).select().single();
+      if (error) throw error;
+      order = data;
+      await BD.uploadAll(order.id, 'design', files, status);
+      showSubmitted(view, order);
+    } catch (err) {
+      submit.disabled = false;
+      status.className = 'status error';
+      status.textContent = order
+        ? '訂單 ' + BD.orderNo(order.id) + ' 已建立，但部分檔案上載失敗（' + BD.errText(err) + '）。請到訂單頁面再上傳。'
+        : BD.errText(err);
+      if (order) setTimeout(() => { location.hash = '#order-' + order.id; }, 2500);
+    }
+  }},
+    h('h2', null, '新訂單'),
+    h('div', {class: 'fields'},
+      field('contact_name', '聯絡人 *', inp('contact_name', {required: true, maxlength: '100', autocomplete: 'name', value: prev.contact_name || ''})),
+      field('company', '公司名稱（選填）', inp('company', {maxlength: '100', autocomplete: 'organization', value: prev.company || ''})),
+      field('phone', '聯絡電話 / WhatsApp *', inp('phone', {required: true, type: 'tel', maxlength: '40', autocomplete: 'tel', value: prev.phone || ''})),
+      field('product_type', '製作類型 *', h('select', {id: 'product_type', required: true}, BD.PRODUCTS.map(p => h('option', null, p)))),
+      field('size', '尺寸', inp('size', {maxlength: '200', placeholder: '例如：120 × 80cm'})),
+      field('quantity', '數量', inp('quantity', {type: 'number', min: '1', max: '100000', inputmode: 'numeric', placeholder: '例如：2'})),
+      field('material', '物料（如知道）', inp('material', {maxlength: '200', placeholder: '例如：PP 背膠、啞膜'})),
+      field('due_date', '希望完成日期', inp('due_date', {type: 'date'})),
+      h('div', {class: 'field full'}, h('label', {class: 'check'}, inp('install_needed', {type: 'checkbox'}), '需要現場安裝')),
+      field('details', '項目資料', h('textarea', {id: 'details', rows: '4', maxlength: '3000', placeholder: '用途、安裝地點、顏色要求等'}), true),
+      h('div', {class: 'field full'}, picker.el)),
+    h('div', {class: 'form-actions'}, submit), status);
+  view.replaceChildren(form);
+}
+
+function showSubmitted(view, order) {
+  const no = BD.orderNo(order.id);
+  const text = '你好，巴登，我已喺客戶專區提交訂單 ' + no + '（' + order.product_type + '），麻煩跟進。';
+  view.replaceChildren(h('div', {class: 'card'},
+    h('h2', null, '✓ 訂單 ' + no + ' 已提交'),
+    h('p', {class: 'muted'}, '我哋會檢查你嘅資料及設計稿，完成後會喺此專區上傳確認稿（JPG），屆時請登入確認。'),
+    h('div', {class: 'form-actions'},
+      h('a', {class: 'btn green', href: BD.waLink(BD.cfg.WHATSAPP, text), target: '_blank', rel: 'noopener'}, 'WhatsApp 通知巴登 ↗'),
+      h('a', {class: 'btn outline', href: '#order-' + order.id}, '查看訂單'))));
+}
+
+async function showOrder(view, id) {
+  const [ord, fls] = await Promise.all([
+    sb.from('orders').select('*').eq('id', id).maybeSingle(),
+    sb.from('order_files').select('*').eq('order_id', id).order('created_at')]);
+  if (ord.error) throw ord.error;
+  if (fls.error) throw fls.error;
+  const o = ord.data;
+  if (!o) { view.replaceChildren(h('p', {class: 'error'}, '找不到此訂單。'), h('a', {href: '#orders'}, '返回訂單列表')); return; }
+  const files = fls.data;
+  const urls = await BD.signedUrls(files);
+  const designs = files.filter(f => f.kind === 'design');
+  const proofs = files.filter(f => f.kind === 'proof').sort((a, b) => (b.version || 0) - (a.version || 0));
+  const invoices = files.filter(f => f.kind === 'invoice');
+  const open = !['completed', 'cancelled'].includes(o.status);
+
+  const more = BD.filePicker({id: 'more-designs', label: '＋ 補充設計稿', hint: '每個最多 50MB'});
+  const moreStatus = h('p', {class: 'status', role: 'status'});
+  const moreBtn = h('button', {class: 'btn small', type: 'button', onclick: async () => {
+    const list = more.files();
+    if (!list.length) { moreStatus.textContent = '請先選擇檔案。'; return; }
+    moreBtn.disabled = true;
+    try { await BD.uploadAll(id, 'design', list, moreStatus); route(); }
+    catch (err) { moreBtn.disabled = false; moreStatus.className = 'status error'; moreStatus.textContent = BD.errText(err); }
+  }}, '上傳');
+
+  view.replaceChildren(
+    h('a', {class: 'back', href: '#orders'}, '← 返回訂單列表'),
+    h('div', {class: 'page-head'}, h('h2', null, '訂單 ' + BD.orderNo(o.id)), BD.badge(o.status)),
+    h('div', {class: 'detail-grid'},
+      h('div', null,
+        h('section', {class: 'card'}, h('h3', null, '確認稿件'), proofSection(proofs, urls)),
+        h('section', {class: 'card'}, h('h3', null, '發票'), BD.fileList(invoices, urls))),
+      h('div', null,
+        h('section', {class: 'card'}, h('h3', null, '訂單資料'), BD.orderInfo(o)),
+        h('section', {class: 'card'}, h('h3', null, '我上傳嘅設計稿'), BD.fileList(designs, urls),
+          open ? h('div', {class: 'inline-form'}, more.el, moreBtn, moreStatus) : null))));
+}
+
+function proofSection(proofs, urls) {
+  if (!proofs.length) return h('p', {class: 'muted'}, '巴登整理好稿件後會喺呢度上傳，屆時請檢查並確認。');
+  const [latest, ...older] = proofs;
+  const url = urls[latest.path];
+  const parts = [
+    h('p', null, h('b', null, '第 ' + (latest.version || 1) + ' 稿'), ' ', BD.badge(latest.proof_status, BD.PROOF_STATUS), ' ', h('span', {class: 'muted'}, BD.fmtDate(latest.created_at))),
+    url && BD.isImage(latest.file_name)
+      ? h('a', {class: 'proof-view', href: url, target: '_blank', rel: 'noopener'}, h('img', {src: url, alt: '確認稿第 ' + (latest.version || 1) + ' 稿'}))
+      : null,
+    url ? h('p', null, h('a', {href: BD.downloadUrl(url, latest.file_name), target: '_blank', rel: 'noopener'}, '下載 ' + latest.file_name)) : null,
+    latest.note ? h('p', {class: 'muted'}, '巴登備註：' + latest.note) : null,
+    latest.customer_comment ? h('p', {class: 'comment'}, '你嘅意見：' + latest.customer_comment) : null];
+  if (latest.proof_status === 'pending') parts.push(proofActions(latest));
+  if (older.length) parts.push(h('details', {class: 'proof-history'}, h('summary', null, '之前嘅稿件（' + older.length + '）'),
+    BD.fileList(older, urls, f => h('span', null, '第 ' + (f.version || 1) + ' 稿 ', BD.badge(f.proof_status, BD.PROOF_STATUS))),
+    older.filter(f => f.customer_comment).map(f => h('p', {class: 'comment'}, '第 ' + (f.version || 1) + ' 稿意見：' + f.customer_comment))));
+  return h('div', null, parts);
+}
+
+function proofActions(proof) {
+  const comment = h('textarea', {id: 'proof-comment', rows: '3', maxlength: '2000', placeholder: '如需修改，請寫低要改嘅地方（例如：電話號碼改為…、Logo 放大少少）'});
+  const status = h('p', {class: 'status', role: 'status'});
+  const respond = async approve => {
+    if (!approve && !comment.value.trim()) { status.className = 'status error'; status.textContent = '請先填寫修改意見。'; comment.focus(); return; }
+    if (approve && !confirm('確認此稿件無誤，可以開始製作？')) return;
+    const {error} = await sb.rpc('respond_proof', {p_file_id: proof.id, p_approve: approve, p_comment: comment.value.trim() || null});
+    if (error) { status.className = 'status error'; status.textContent = BD.errText(error); return; }
+    route();
+  };
+  return h('div', {class: 'proof-actions'},
+    h('p', null, h('b', null, '請檢查稿件內容、文字、顏色及尺寸。'), h('br'), h('span', {class: 'muted'}, '確認後我哋會按此稿件安排製作。')),
+    h('label', {for: 'proof-comment'}, '修改意見（要求修改時必填）'), comment,
+    h('div', {class: 'form-actions'},
+      h('button', {class: 'btn green', type: 'button', onclick: () => respond(true)}, '✓ 確認稿件，可以製作'),
+      h('button', {class: 'btn outline', type: 'button', onclick: () => respond(false)}, '要求修改')),
+    status);
+}
+
+if (!BD.ready) {
+  $('setup').hidden = false;
+} else {
+  $('logout').addEventListener('click', () => sb.auth.signOut());
+  window.addEventListener('hashchange', route);
+  sb.auth.onAuthStateChange((event, session) => {
+    // Supabase 建議唔好喺此 callback 內直接 await 其他請求
+    setTimeout(() => {
+      if (event === 'PASSWORD_RECOVERY') {
+        recovering = true;
+        $('app').hidden = true;
+        $('auth').hidden = false;
+        BD.mountRecovery($('auth'), () => { recovering = false; user = undefined; setUser(session.user); });
+        return;
+      }
+      setUser(session ? session.user : null);
+    }, 0);
+  });
+}
+</script>
+</body></html>

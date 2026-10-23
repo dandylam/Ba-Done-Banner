@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="#272331">
+<title>管理後台 | 巴登噴畫及製作公司</title>
+<link rel="stylesheet" href="assets/portal/portal.css">
+</head><body>
+<header class="topbar"><div class="wrap"><a class="brand" href="#orders"><strong>巴登 · 管理後台</strong><small>Orders · Proofs · Invoices</small></a><div class="top-actions"><span class="who" id="who"></span><button class="btn outline small" id="logout" type="button" hidden>登出</button></div></div></header>
+<main class="wrap">
+<div class="notice warn" id="setup" hidden><b>後台尚未啟用。</b><br>請先喺 <code>assets/portal/config.js</code> 填入 Supabase 設定（步驟見 <code>supabase/README.md</code>）。</div>
+<div id="auth"></div>
+<div id="denied" class="card" hidden><h2>此帳戶沒有管理權限</h2><p class="muted">請喺 Supabase SQL Editor 將此帳戶加入 <code>admins</code>（見 <code>supabase/README.md</code>），然後重新整理頁面。</p></div>
+<div id="app" hidden><div id="view"></div></div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="assets/portal/config.js"></script>
+<script src="assets/portal/common.js"></script>
+<script>
+'use strict';
+const {sb, h} = BD;
+const $ = id => document.getElementById(id);
+let user; // undefined = 未初始化
+let filter = {status: 'active', q: ''};
+const NEEDS_ACTION = ['submitted', 'revision', 'confirmed'];
+
+async function setUser(u) {
+  if ((u && u.id) === (user && user.id)) return;
+  user = u;
+  $('who').textContent = u ? u.email : '';
+  $('logout').hidden = !u;
+  $('auth').hidden = !!u;
+  $('app').hidden = $('denied').hidden = true;
+  if (!u) { BD.mountAuth($('auth'), {signup: false, title: '管理員登入'}); return; }
+  const {data, error} = await sb.rpc('is_admin');
+  if (error || !data) { $('denied').hidden = false; return; }
+  $('app').hidden = false;
+  route();
+}
+
+function route() {
+  if (!user || $('app').hidden) return;
+  const m = location.hash.match(/^#order-(\d+)$/);
+  const view = $('view');
+  view.replaceChildren(h('p', {class: 'muted'}, '載入中…'));
+  (m ? showOrder(view, +m[1]) : showList(view)).catch(err => view.replaceChildren(h('p', {class: 'error'}, BD.errText(err))));
+}
+
+async function showList(view) {
+  const {data, error} = await sb.from('orders').select('*').order('created_at', {ascending: false}).limit(500);
+  if (error) throw error;
+  const listEl = h('div', {class: 'order-list'});
+  const render = () => {
+    const q = filter.q.toLowerCase();
+    const rows = data.filter(o => (filter.status === 'all' || (filter.status === 'active' ? !['completed', 'cancelled'].includes(o.status) : o.status === filter.status))
+      && (!q || [BD.orderNo(o.id), o.contact_name, o.company, o.phone, o.customer_email, o.product_type].some(v => v && v.toLowerCase().includes(q))));
+    listEl.replaceChildren(...(rows.length ? rows.map(o => h('a', {class: 'order-row' + (NEEDS_ACTION.includes(o.status) ? ' attention' : ''), href: '#order-' + o.id},
+      h('b', null, BD.orderNo(o.id)),
+      h('span', {class: 'meta'}, [o.contact_name, o.company, o.product_type, o.size].filter(Boolean).join(' · ') + ' · ' + BD.fmtDate(o.created_at)),
+      BD.badge(o.status))) : [h('div', {class: 'card empty'}, '沒有符合條件嘅訂單。')]));
+  };
+  const statusSel = h('select', {'aria-label': '狀態篩選', onchange: e => { filter.status = e.target.value; render(); }},
+    [['active', '進行中訂單'], ['all', '全部訂單'], ...Object.entries(BD.STATUS)].map(([v, t]) => h('option', {value: v, selected: v === filter.status}, t)));
+  const search = h('input', {type: 'search', placeholder: '搜尋編號、客戶、電話、電郵…', 'aria-label': '搜尋', value: filter.q, oninput: e => { filter.q = e.target.value; render(); }});
+  const waiting = data.filter(o => NEEDS_ACTION.includes(o.status)).length;
+  view.replaceChildren(
+    h('div', {class: 'page-head'}, h('div', null, h('div', {class: 'eyebrow'}, 'ORDERS'), h('h1', null, '訂單管理')),
+      h('p', {class: 'muted'}, '共 ' + data.length + ' 張訂單 · ' + waiting + ' 張需要跟進')),
+    h('div', {class: 'filters'}, statusSel, search), listEl);
+  render();
+}
+
+async function showOrder(view, id) {
+  const [ord, fls] = await Promise.all([
+    sb.from('orders').select('*').eq('id', id).maybeSingle(),
+    sb.from('order_files').select('*').eq('order_id', id).order('created_at')]);
+  if (ord.error) throw ord.error;
+  if (fls.error) throw fls.error;
+  const o = ord.data;
+  if (!o) { view.replaceChildren(h('p', {class: 'error'}, '找不到此訂單。')); return; }
+  const files = fls.data;
+  const urls = await BD.signedUrls(files);
+  const designs = files.filter(f => f.kind === 'design');
+  const proofs = files.filter(f => f.kind === 'proof').sort((a, b) => (b.version || 0) - (a.version || 0));
+  const invoices = files.filter(f => f.kind === 'invoice');
+  const no = BD.orderNo(o.id);
+  const custPhone = waNumber(o.phone);
+  const portalUrl = (BD.cfg.SITE_URL || location.origin) + '/portal.html#order-' + o.id;
+
+  // 狀態
+  const statusSel = h('select', {id: 'status-sel'}, Object.entries(BD.STATUS).map(([v, t]) => h('option', {value: v, selected: v === o.status}, t)));
+  const statusMsg = h('p', {class: 'status', role: 'status'});
+  const statusCard = h('section', {class: 'card'}, h('h3', null, '訂單狀態'),
+    h('label', {for: 'status-sel'}, '更改狀態'), statusSel,
+    h('div', {class: 'form-actions'}, h('button', {class: 'btn small', type: 'button', onclick: async () => {
+      const {error} = await sb.from('orders').update({status: statusSel.value}).eq('id', id);
+      if (error) { statusMsg.className = 'status error'; statusMsg.textContent = BD.errText(error); return; }
+      route();
+    }}, '儲存狀態')), statusMsg);
+
+  // 上傳確認稿
+  const proofPick = BD.filePicker({id: 'proof-file', label: '＋ 選擇確認稿（JPG / PNG / PDF）', hint: '客戶會喺專區睇到並按確認', accept: 'image/*,.pdf', max: 1});
+  const proofNote = h('input', {id: 'proof-note', maxlength: '500', placeholder: '例如：已按要求更改電話號碼'});
+  const proofMsg = h('p', {class: 'status', role: 'status'});
+  const proofBtn = h('button', {class: 'btn small', type: 'button', onclick: async () => {
+    const [file] = proofPick.files();
+    if (!file) { proofMsg.textContent = '請先選擇檔案。'; return; }
+    proofBtn.disabled = true;
+    try {
+      const pending = proofs.filter(p => p.proof_status === 'pending').map(p => p.id);
+      if (pending.length) {
+        const {error} = await sb.from('order_files').update({proof_status: 'superseded'}).in('id', pending);
+        if (error) throw error;
+      }
+      const version = proofs.reduce((n, p) => Math.max(n, p.version || 0), 0) + 1;
+      await BD.uploadAll(id, 'proof', [file], proofMsg, {version, proof_status: 'pending', note: proofNote.value.trim() || null});
+      const {error} = await sb.from('orders').update({status: 'proof_sent'}).eq('id', id);
+      if (error) throw error;
+      route();
+    } catch (err) { proofBtn.disabled = false; proofMsg.className = 'status error'; proofMsg.textContent = BD.errText(err); }
+  }}, '上傳並交客戶確認');
+
+  // 上傳發票
+  const invPick = BD.filePicker({id: 'inv-file', label: '＋ 選擇發票（PDF / JPG）', hint: '客戶可喺專區下載', accept: '.pdf,image/*', max: 5});
+  const invNote = h('input', {id: 'inv-note', maxlength: '500', placeholder: '例如：發票 INV-1023 · HK$2,400'});
+  const invMsg = h('p', {class: 'status', role: 'status'});
+  const invBtn = h('button', {class: 'btn small', type: 'button', onclick: async () => {
+    const list = invPick.files();
+    if (!list.length) { invMsg.textContent = '請先選擇檔案。'; return; }
+    invBtn.disabled = true;
+    try { await BD.uploadAll(id, 'invoice', list, invMsg, {note: invNote.value.trim() || null}); route(); }
+    catch (err) { invBtn.disabled = false; invMsg.className = 'status error'; invMsg.textContent = BD.errText(err); }
+  }}, '上傳發票');
+
+  const delBtn = f => h('button', {class: 'btn danger small', type: 'button', onclick: async () => {
+    if (!confirm('刪除 ' + f.file_name + '？此操作無法復原。')) return;
+    const rm = await sb.storage.from('order-files').remove([f.path]);
+    if (rm.error) { alert(BD.errText(rm.error)); return; }
+    const {error} = await sb.from('order_files').delete().eq('id', f.id);
+    if (error) { alert(BD.errText(error)); return; }
+    route();
+  }}, '刪除');
+
+  const waText = o.status === 'proof_sent'
+    ? '你好，巴登已上傳訂單 ' + no + ' 嘅確認稿，請登入客戶專區檢查及確認：' + portalUrl
+    : '你好，關於訂單 ' + no + '：' + portalUrl;
+
+  view.replaceChildren(
+    h('a', {class: 'back', href: '#orders'}, '← 返回訂單列表'),
+    h('div', {class: 'page-head'}, h('h2', null, '訂單 ' + no), BD.badge(o.status)),
+    h('div', {class: 'detail-grid'},
+      h('div', null,
+        h('section', {class: 'card'}, h('h3', null, '確認稿（Proof）'), proofList(proofs, urls, delBtn),
+          h('div', {class: 'inline-form'}, proofPick.el, h('label', {for: 'proof-note'}, '備註（客戶睇到）'), proofNote, proofBtn, proofMsg)),
+        h('section', {class: 'card'}, h('h3', null, '客戶設計稿'), BD.fileList(designs, urls)),
+        h('section', {class: 'card'}, h('h3', null, '發票'), BD.fileList(invoices, urls, delBtn),
+          h('div', {class: 'inline-form'}, invPick.el, h('label', {for: 'inv-note'}, '備註（客戶睇到）'), invNote, invBtn, invMsg))),
+      h('div', null,
+        statusCard,
+        h('section', {class: 'card'}, h('h3', null, '客戶及訂單資料'), BD.orderInfo(o),
+          h('dl', {class: 'info'}, h('dt', null, '登入電郵'), h('dd', null, h('a', {href: 'mailto:' + o.customer_email}, o.customer_email || ''))),
+          custPhone ? h('div', {class: 'form-actions'}, h('a', {class: 'btn green small', href: BD.waLink(custPhone, waText), target: '_blank', rel: 'noopener'}, 'WhatsApp 通知客戶 ↗')) : null))));
+}
+
+function proofList(proofs, urls, delBtn) {
+  if (!proofs.length) return h('p', {class: 'muted'}, '未上傳確認稿。');
+  return h('ul', {class: 'files'}, proofs.map(f => {
+    const url = urls[f.path];
+    return h('li', null, h('div', null,
+      h('b', null, '第 ' + (f.version || 1) + ' 稿 '), BD.badge(f.proof_status, BD.PROOF_STATUS), h('br'),
+      url ? h('a', {href: url, target: '_blank', rel: 'noopener'}, f.file_name) : f.file_name,
+      h('small', null, [BD.fmtDate(f.created_at), f.note, f.responded_at && '客戶回覆：' + BD.fmtDate(f.responded_at)].filter(Boolean).join(' · ')),
+      f.customer_comment ? h('p', {class: 'comment'}, '客戶意見：' + f.customer_comment) : null), delBtn(f));
+  }));
+}
+
+// 香港 8 位數字電話自動加 852
+function waNumber(phone) {
+  const d = (phone || '').replace(/\D/g, '');
+  if (d.length === 8) return '852' + d;
+  return d.length >= 10 ? d : '';
+}
+
+if (!BD.ready) {
+  $('setup').hidden = false;
+} else {
+  $('logout').addEventListener('click', () => sb.auth.signOut());
+  window.addEventListener('hashchange', route);
+  sb.auth.onAuthStateChange((event, session) => {
+    setTimeout(() => {
+      if (event === 'PASSWORD_RECOVERY') {
+        user = session.user;
+        $('app').hidden = true;
+        $('auth').hidden = false;
+        BD.mountRecovery($('auth'), () => { user = undefined; setUser(session.user); });
+        return;
+      }
+      setUser(session ? session.user : null);
+    }, 0);
+  });
+}
+</script>
+</body></html>
